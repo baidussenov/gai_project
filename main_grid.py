@@ -24,12 +24,19 @@ grid_rows = None
 grid_cols = None
 cells_to_mask = None
 random_state = None
+start_scene = None  # Starting scene number
 
 def get_user_input():
-    """Get grid parameters from the user."""
-    global grid_rows, grid_cols, cells_to_mask, random_state, num_scenes
+    """Get grid parameters and starting scene from the user."""
+    global grid_rows, grid_cols, cells_to_mask, random_state, num_scenes, start_scene
     
     try:
+        start_scene_input = input("Enter the starting scene number (default: 1): ") or "1"
+        start_scene = int(start_scene_input)
+        if start_scene <= 0:
+            print("Starting scene must be a positive integer.")
+            return False
+            
         num_scenes = int(input("Enter the number of scenes to process (default: 40): ") or "40")
         grid_rows = int(input("Enter the number of rows in the grid: "))
         grid_cols = int(input("Enter the number of columns in the grid: "))
@@ -311,16 +318,22 @@ def select_random_cells(rect_idx, scene_idx, total_cells, cells_to_mask, random_
     # Select random cells
     return sorted(local_random.sample(range(total_cells), cells_to_mask))
 
-def collect_scene_masks(scene_dirs, num_scenes):
+def collect_scene_masks(scene_dirs, num_scenes, start_scene):
     """Collect first and last frame masks for all specified scenes."""
     global mask_rects
     scene_masks = {}  # {scene_name: (start_masks, end_masks, frame_height, frame_width, normal_frames, selected_cells_list)}
     
-    print("\nPhase 1: Collecting first and last frame masks...")
-    for scene_idx, scene_name in enumerate(tqdm(scene_dirs[:num_scenes], desc="Collecting masks")):
-        scene_dir = os.path.join(dataset_root_expanded, scene_name)
-        print(f"\nProcessing scene {scene_idx + 1}: {scene_name}...")
+    # Calculate the end index for scene selection
+    start_idx = start_scene - 1
+    end_idx = min(start_idx + num_scenes, len(scene_dirs))
+    scenes_to_process = scene_dirs[start_idx:end_idx]
+    
+    print(f"\nPhase 1: Collecting first and last frame masks for scenes {start_scene} to {start_scene + len(scenes_to_process) - 1}...")
+    for scene_idx, scene_name in enumerate(tqdm(scenes_to_process, desc="Collecting masks")):
+        global_scene_idx = start_idx + scene_idx  # For consistent random seed
+        print(f"\nProcessing scene {start_scene + scene_idx}: {scene_name}...")
 
+        scene_dir = os.path.join(dataset_root_expanded, scene_name)
         light_levels = ["normal_light_10", "low_light_10", "low_light_20"]
         frame_dirs = {ll: os.path.join(scene_dir, ll) for ll in light_levels}
         
@@ -376,7 +389,7 @@ def collect_scene_masks(scene_dirs, num_scenes):
                 selected_cells_list = []
                 for i, rect in enumerate(mask_rects):
                     total_cells = grid_rows * grid_cols
-                    selected_cells = select_random_cells(i, scene_idx, total_cells, cells_to_mask, random_state)
+                    selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
                     selected_cells_list.append(selected_cells)
                 
                 display_with_grid = visualize_grid(display, mask_rects, grid_rows, grid_cols, selected_cells_list)
@@ -415,7 +428,7 @@ def collect_scene_masks(scene_dirs, num_scenes):
         selected_cells_list = []
         for i in range(len(mask_rects)):
             total_cells = grid_rows * grid_cols
-            selected_cells = select_random_cells(i, scene_idx, total_cells, cells_to_mask, random_state)
+            selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
             selected_cells_list.append(selected_cells)
 
         # Load last frame
@@ -474,7 +487,7 @@ def collect_scene_masks(scene_dirs, num_scenes):
                         selected_cells_list = []
                         for i in range(len(mask_rects)):
                             total_cells = grid_rows * grid_cols
-                            selected_cells = select_random_cells(i, scene_idx, total_cells, cells_to_mask, random_state)
+                            selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
                             selected_cells_list.append(selected_cells)
                         
                         display_with_grid = visualize_grid(display, mask_rects, grid_rows, grid_cols, selected_cells_list)
@@ -503,7 +516,7 @@ def collect_scene_masks(scene_dirs, num_scenes):
                 selected_cells_list = []
                 for i in range(len(mask_rects)):
                     total_cells = grid_rows * grid_cols
-                    selected_cells = select_random_cells(i, scene_idx, total_cells, cells_to_mask, random_state)
+                    selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
                     selected_cells_list.append(selected_cells)
                 
                 print("\nReturned to last frame. Adjust all mask positions.")
@@ -611,9 +624,9 @@ def generate_scene_masks(scene_masks):
         print(f"Completed scene {scene_name}. Masks saved to {mask_output_dir}")
 
 def main():
-    global dataset_root_expanded
+    global dataset_root_expanded, start_scene, num_scenes
     
-    # Get user input for grid configuration
+    # Get user input for grid configuration and starting scene
     if not get_user_input():
         print("Invalid input. Exiting.")
         return
@@ -629,14 +642,17 @@ def main():
         print("No scene directories found in the dataset root.")
         return
 
-    if num_scenes > len(scene_dirs):
-        print(f"Requested {num_scenes} scenes, but only {len(scene_dirs)} available. Processing all scenes.")
-        num_scenes_to_process = len(scene_dirs)
-    else:
-        num_scenes_to_process = num_scenes
+    # Validate starting scene and number of scenes
+    if start_scene > len(scene_dirs):
+        print(f"Starting scene {start_scene} is beyond available scenes ({len(scene_dirs)}). Exiting.")
+        return
+
+    num_scenes_to_process = min(num_scenes, len(scene_dirs) - (start_scene - 1))
+    if num_scenes_to_process < num_scenes:
+        print(f"Requested {num_scenes} scenes, but only {num_scenes_to_process} available from scene {start_scene}. Processing available scenes.")
 
     # Phase 1: Collect masks - each scene can have multiple masks
-    scene_masks = collect_scene_masks(scene_dirs, num_scenes_to_process)
+    scene_masks = collect_scene_masks(scene_dirs, num_scenes_to_process, start_scene)
 
     # Phase 2: Generate and save masks
     if scene_masks:
