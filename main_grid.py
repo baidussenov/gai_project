@@ -6,8 +6,8 @@ from tqdm import tqdm
 import random
 
 # Configuration
-dataset_root = "~/Desktop/gai-project/BVI-Lowlight-videos"  # Update to your dataset path
-output_root = "./output_masks"  # Where to save mask images and arrays
+dataset_root = "D:\GAI\gai_project\BVI-Lowlight-videos"  # Update to your dataset path
+output_root = ".\output_masks"  # Where to save mask images and arrays
 save_masked_frames = False  # Set to True to save masked frames
 num_scenes = 40  # Default number of scenes to process
 
@@ -334,16 +334,16 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         print(f"\nProcessing scene {start_scene + scene_idx}: {scene_name}...")
 
         scene_dir = os.path.join(dataset_root_expanded, scene_name)
-        light_levels = ["normal_light_10", "low_light_10", "low_light_20"]
+        light_levels = ["low_light_10"]
         frame_dirs = {ll: os.path.join(scene_dir, ll) for ll in light_levels}
         
         if not all(os.path.exists(frame_dirs[ll]) for ll in light_levels):
             print(f"Missing light level directories for scene {scene_name}, skipping.")
             continue
 
-        normal_frames = sorted(glob.glob(os.path.join(frame_dirs["normal_light_10"], "*.png")))
+        normal_frames = sorted(glob.glob(os.path.join(frame_dirs["low_light_10"], "*.png")))
         if not normal_frames:
-            print(f"No frames found in normal_light_10 for scene {scene_name}, skipping.")
+            print(f"No frames found in low_light_10 for scene {scene_name}, skipping.")
             continue
 
         num_frames = len(normal_frames)
@@ -369,9 +369,10 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         # Allow drawing rectangles for the first frame
         clone = first_frame.copy()
         window_name = f"Draw Masks - First Frame of Scene {scene_name}"
-        cv2.namedWindow(window_name)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, min(frame_width, 1200), min(frame_height, 800))
         cv2.setMouseCallback(window_name, draw_rectangle, param=(frame_height, frame_width))
-        
+
         print("Draw rectangles on the first frame.")
         print("Left-click and drag to create a rectangle. Click on existing rectangles to move them.")
         print("Press Enter to confirm all rectangles and move to last frame.")
@@ -441,7 +442,8 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         mask_rects = start_masks.copy()
         
         window_name = f"Adjust Masks - Last Frame of Scene {scene_name}"
-        cv2.namedWindow(window_name)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, min(frame_width, 1200), min(frame_height, 800))
         cv2.setMouseCallback(window_name, set_mask_position, param=(frame_height, frame_width, mask_sizes))
 
         print("\nAdjust mask positions on the last frame:")
@@ -473,7 +475,8 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 
                 # Return to first frame to add more masks
                 window_name = f"Add More Masks - First Frame of Scene {scene_name}"
-                cv2.namedWindow(window_name)
+                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(window_name, min(frame_width, 1200), min(frame_height, 800))
                 cv2.setMouseCallback(window_name, draw_rectangle, param=(frame_height, frame_width))
                 
                 print("\nReturned to first frame to add more masks.")
@@ -585,7 +588,7 @@ def generate_scene_masks(scene_masks):
 
             # Apply masks to all light levels (for masked frames)
             if save_masked_frames:
-                light_levels = ["normal_light_10", "low_light_10", "low_light_20"]
+                light_levels = ["low_light_10"]
                 frame_dirs = {ll: os.path.join(dataset_root_expanded, scene_name, ll) for ll in light_levels}
                 for ll in light_levels:
                     frame_path = os.path.join(frame_dirs[ll], os.path.basename(normal_frames[frame_idx]))
