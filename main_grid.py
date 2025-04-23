@@ -6,8 +6,8 @@ from tqdm import tqdm
 import random
 
 # Configuration
-dataset_root = "D:\GAI\gai_project\BVI-Lowlight-videos"  # Update to your dataset path
-output_root = ".\output_masks"  # Where to save mask images and arrays
+dataset_root = "D:/GAI/gai_project/BVI-Lowlight-videos"  # Update to your dataset path
+output_root = "./output_masks"  # Where to save mask images and arrays
 save_masked_frames = False  # Set to True to save masked frames
 num_scenes = 40  # Default number of scenes to process
 
@@ -16,19 +16,16 @@ drawing = False
 dragging = False
 start_point = None
 end_point = None
-mask_rects = []  # List to store multiple masks per scene
 current_mask_idx = -1  # Index of current mask being drawn/modified
 temp_rect = None  # To store rectangle during drawing
 drag_offset = (0, 0)  # Offset for dragging
-grid_rows = None
-grid_cols = None
-cells_to_mask = None
+mask_data = []  # Will store (rect, grid_rows, grid_cols, cells_to_mask) per mask
 random_state = None
 start_scene = None  # Starting scene number
 
 def get_user_input():
-    """Get grid parameters and starting scene from the user."""
-    global grid_rows, grid_cols, cells_to_mask, random_state, num_scenes, start_scene
+    """Get starting scene and other global parameters from the user."""
+    global random_state, num_scenes, start_scene
     
     try:
         start_scene_input = input("Enter the starting scene number (default: 1): ") or "1"
@@ -38,28 +35,39 @@ def get_user_input():
             return False
             
         num_scenes = int(input("Enter the number of scenes to process (default: 40): ") or "40")
-        grid_rows = int(input("Enter the number of rows in the grid: "))
-        grid_cols = int(input("Enter the number of columns in the grid: "))
-        cells_to_mask = int(input("Enter the number of cells to mask in each scene: "))
         random_state = int(input("Enter a random state for reproducibility: "))
-        
-        if grid_rows <= 0 or grid_cols <= 0:
-            print("Rows and columns must be positive integers.")
-            return False
-        
-        total_cells = grid_rows * grid_cols
-        if cells_to_mask <= 0 or cells_to_mask > total_cells:
-            print(f"Number of cells to mask must be between 1 and {total_cells}.")
-            return False
             
         return True
     except ValueError:
         print("Please enter valid integers.")
         return False
 
+def get_mask_grid_parameters(mask_index):
+    """Get grid parameters for a specific mask."""
+    try:
+        print(f"\nEnter grid parameters for mask #{mask_index + 1}:")
+        grid_rows = int(input("Number of rows in the grid: "))
+        grid_cols = int(input("Number of columns in the grid: "))
+        
+        if grid_rows <= 0 or grid_cols <= 0:
+            print("Rows and columns must be positive integers.")
+            return None
+            
+        total_cells = grid_rows * grid_cols
+        cells_to_mask = int(input(f"Number of cells to mask (1-{total_cells}): "))
+        
+        if cells_to_mask <= 0 or cells_to_mask > total_cells:
+            print(f"Number of cells to mask must be between 1 and {total_cells}.")
+            return None
+            
+        return (grid_rows, grid_cols, cells_to_mask)
+    except ValueError:
+        print("Please enter valid integers.")
+        return None
+
 def draw_rectangle(event, x, y, flags, param):
     """Callback for mouse events to draw a rectangle on the first frame."""
-    global drawing, dragging, start_point, end_point, mask_rects, current_mask_idx, temp_rect, drag_offset
+    global drawing, dragging, start_point, end_point, mask_data, current_mask_idx, temp_rect, drag_offset
     frame_height, frame_width = param
     
     # Ensure x, y are within frame boundaries
@@ -69,7 +77,7 @@ def draw_rectangle(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN:
         # Check if clicking on an existing rectangle to drag
         clicked_on_rect = False
-        for i, rect in enumerate(mask_rects):
+        for i, (rect, _, _, _) in enumerate(mask_data):
             x1, y1, x2, y2 = rect
             if x1 <= x <= x2 and y1 <= y <= y2:
                 dragging = True
@@ -93,15 +101,17 @@ def draw_rectangle(event, x, y, flags, param):
             x2, y2 = end_point
             temp_rect = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
         
-        elif dragging and current_mask_idx < len(mask_rects):
+        elif dragging and current_mask_idx < len(mask_data):
             # Dragging an existing rectangle
-            x1, y1, x2, y2 = mask_rects[current_mask_idx]
+            rect, grid_rows, grid_cols, cells_to_mask = mask_data[current_mask_idx]
+            x1, y1, x2, y2 = rect
             width = x2 - x1
             height = y2 - y1
             new_x1 = x - drag_offset[0]
             new_y1 = y - drag_offset[1]
             # Allow mask to extend outside the frame
-            mask_rects[current_mask_idx] = (new_x1, new_y1, new_x1 + width, new_y1 + height)
+            new_rect = (new_x1, new_y1, new_x1 + width, new_y1 + height)
+            mask_data[current_mask_idx] = (new_rect, grid_rows, grid_cols, cells_to_mask)
     
     elif event == cv2.EVENT_LBUTTONUP:
         if drawing:
@@ -112,23 +122,30 @@ def draw_rectangle(event, x, y, flags, param):
             new_rect = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
             # Only add rectangle if it has some area
             if new_rect[2] > new_rect[0] and new_rect[3] > new_rect[1]:
-                mask_rects.append(new_rect)
-                current_mask_idx = len(mask_rects) - 1
-                print(f"Rectangle {current_mask_idx + 1} created: {new_rect}, size: width={new_rect[2] - new_rect[0]}, height={new_rect[3] - new_rect[1]}")
+                # Prompt for grid parameters for this specific mask
+                grid_params = get_mask_grid_parameters(len(mask_data))
+                if grid_params:
+                    grid_rows, grid_cols, cells_to_mask = grid_params
+                    mask_data.append((new_rect, grid_rows, grid_cols, cells_to_mask))
+                    current_mask_idx = len(mask_data) - 1
+                    print(f"Rectangle {current_mask_idx + 1} created: {new_rect}, size: width={new_rect[2] - new_rect[0]}, height={new_rect[3] - new_rect[1]}")
+                    print(f"Grid: {grid_rows}x{grid_cols} with {cells_to_mask} cells masked")
+                else:
+                    print("Invalid grid parameters, rectangle not added.")
             else:
                 print("Rectangle too small, ignoring.")
                 temp_rect = None
         
         elif dragging:
             dragging = False
-            if current_mask_idx < len(mask_rects):
-                rect = mask_rects[current_mask_idx]
+            if current_mask_idx < len(mask_data):
+                rect, _, _, _ = mask_data[current_mask_idx]
                 print(f"Rectangle {current_mask_idx + 1} moved to: {rect}, size: width={rect[2] - rect[0]}, height={rect[3] - rect[1]}")
 
 def set_mask_position(event, x, y, flags, param):
     """Callback to set mask positions on the last frame."""
-    global dragging, mask_rects, current_mask_idx, drag_offset
-    frame_height, frame_width, mask_sizes = param
+    global dragging, mask_data, current_mask_idx, drag_offset
+    frame_height, frame_width = param[:2]
     
     # Ensure x, y are within frame boundaries
     x = max(0, min(x, frame_width - 1))
@@ -137,7 +154,7 @@ def set_mask_position(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN:
         # Check if clicking on an existing rectangle to drag
         clicked_on_rect = False
-        for i, rect in enumerate(mask_rects):
+        for i, (rect, _, _, _) in enumerate(mask_data):
             x1, y1, x2, y2 = rect
             if x1 <= x <= x2 and y1 <= y <= y2:
                 dragging = True
@@ -147,24 +164,29 @@ def set_mask_position(event, x, y, flags, param):
                 print(f"Selected rectangle {current_mask_idx + 1} for dragging (press 'd' to delete)")
                 break
     
-    elif event == cv2.EVENT_MOUSEMOVE and dragging and current_mask_idx < len(mask_rects):
+    elif event == cv2.EVENT_MOUSEMOVE and dragging and current_mask_idx < len(mask_data):
         # Dragging an existing rectangle
-        current_rect = mask_rects[current_mask_idx]
-        width = current_rect[2] - current_rect[0]
-        height = current_rect[3] - current_rect[1]
+        rect, grid_rows, grid_cols, cells_to_mask = mask_data[current_mask_idx]
+        x1, y1, x2, y2 = rect
+        width = x2 - x1
+        height = y2 - y1
         new_x1 = x - drag_offset[0]
         new_y1 = y - drag_offset[1]
         # Allow mask to extend outside the frame
-        mask_rects[current_mask_idx] = (new_x1, new_y1, new_x1 + width, new_y1 + height)
+        new_rect = (new_x1, new_y1, new_x1 + width, new_y1 + height)
+        mask_data[current_mask_idx] = (new_rect, grid_rows, grid_cols, cells_to_mask)
     
     elif event == cv2.EVENT_LBUTTONUP and dragging:
         dragging = False
-        if current_mask_idx < len(mask_rects):
-            rect = mask_rects[current_mask_idx]
+        if current_mask_idx < len(mask_data):
+            rect, _, _, _ = mask_data[current_mask_idx]
             print(f"Rectangle {current_mask_idx + 1} moved to: {rect}, size: width={rect[2] - rect[0]}, height={rect[3] - rect[1]}")
 
-def interpolate_mask(start_rect, end_rect, num_frames, frame_idx):
+def interpolate_mask(start_mask_item, end_mask_item, num_frames, frame_idx):
     """Linearly interpolate mask position between start and end frames."""
+    start_rect, grid_rows, grid_cols, cells_to_mask = start_mask_item
+    end_rect, _, _, _ = end_mask_item  # Grid parameters should be the same between start and end
+    
     x1_s, y1_s, x2_s, y2_s = start_rect
     x1_e, y1_e, x2_e, y2_e = end_rect
     
@@ -189,13 +211,14 @@ def interpolate_mask(start_rect, end_rect, num_frames, frame_idx):
     x2 = x1 + width
     y2 = y1 + height
     
-    return (x1, y1, x2, y2)
+    # Return interpolated rectangle with original grid parameters
+    return ((x1, y1, x2, y2), grid_rows, grid_cols, cells_to_mask)
 
-def apply_grid_mask(image, rects, selected_cells_list, grid_rows, grid_cols):
+def apply_grid_mask(image, mask_data, selected_cells_list):
     """Apply black masks to selected grid cells within multiple rectangles."""
     masked_image = image.copy()
     
-    for rect_idx, (rect, selected_cells) in enumerate(zip(rects, selected_cells_list)):
+    for rect_idx, ((rect, grid_rows, grid_cols, _), selected_cells) in enumerate(zip(mask_data, selected_cells_list)):
         x1, y1, x2, y2 = rect
         
         cell_width = (x2 - x1) // grid_cols
@@ -222,11 +245,11 @@ def apply_grid_mask(image, rects, selected_cells_list, grid_rows, grid_cols):
         
     return masked_image
 
-def create_binary_grid_mask(rects, selected_cells_list, grid_rows, grid_cols, frame_height, frame_width):
+def create_binary_grid_mask(mask_data, selected_cells_list, frame_height, frame_width):
     """Create a binary mask image with selected grid cells from multiple rectangles."""
     mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
     
-    for rect_idx, (rect, selected_cells) in enumerate(zip(rects, selected_cells_list)):
+    for rect_idx, ((rect, grid_rows, grid_cols, _), selected_cells) in enumerate(zip(mask_data, selected_cells_list)):
         x1, y1, x2, y2 = rect
         
         # Clip rectangle to frame boundaries for grid calculation
@@ -259,11 +282,11 @@ def create_binary_grid_mask(rects, selected_cells_list, grid_rows, grid_cols, fr
         
     return mask
 
-def visualize_grid(image, rects, grid_rows, grid_cols, selected_cells_list=None):
+def visualize_grid(image, mask_data, selected_cells_list=None):
     """Visualize the grid and highlight selected cells for multiple rectangles."""
     vis_image = image.copy()
     
-    for rect_idx, rect in enumerate(rects):
+    for rect_idx, (rect, grid_rows, grid_cols, _) in enumerate(mask_data):
         x1, y1, x2, y2 = rect
         
         # Draw rectangle border (with different colors for each rectangle)
@@ -310,8 +333,13 @@ def visualize_grid(image, rects, grid_rows, grid_cols, selected_cells_list=None)
     
     return vis_image
 
-def select_random_cells(rect_idx, scene_idx, total_cells, cells_to_mask, random_state):
+def select_random_cells(rect_idx, scene_idx, mask_item, random_state):
     """Select cells to mask for a specific scene and rectangle based on the random state."""
+    rect, grid_rows, grid_cols, cells_to_mask = mask_item
+    
+    # Calculate total number of cells
+    total_cells = grid_rows * grid_cols
+    
     # Create a unique seed for each scene and rectangle
     combined_seed = random_state + (scene_idx * 1000) + rect_idx
     local_random = random.Random(combined_seed)
@@ -321,7 +349,7 @@ def select_random_cells(rect_idx, scene_idx, total_cells, cells_to_mask, random_
 
 def collect_scene_masks(scene_dirs, num_scenes, start_scene):
     """Collect first and last frame masks for all specified scenes."""
-    global mask_rects, current_mask_idx, temp_rect
+    global mask_data, current_mask_idx, temp_rect
     scene_masks = {}  # {scene_name: (start_masks, end_masks, frame_height, frame_width, normal_frames, selected_cells_list)}
     
     # Calculate the end index for scene selection
@@ -365,7 +393,7 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         frame_height, frame_width = first_frame.shape[:2]
         
         # Reset masks for this scene
-        mask_rects = []
+        mask_data = []
         current_mask_idx = -1  # Initialize to -1 to indicate no rectangle is selected
         temp_rect = None
                 
@@ -389,23 +417,24 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 x1, y1, x2, y2 = temp_rect
                 cv2.rectangle(display, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
             
-            if mask_rects:
+            if mask_data:  # CHANGE: Use mask_data instead of mask_rects
                 # Create separate lists for selected cells
                 selected_cells_list = []
-                for i, rect in enumerate(mask_rects):
-                    total_cells = grid_rows * grid_cols
-                    selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
+                for i, mask_item in enumerate(mask_data):  # CHANGE: Iterate over mask_data
+                    # CHANGE: Use select_random_cells with the updated signature
+                    selected_cells = select_random_cells(i, global_scene_idx, mask_item, random_state)
                     selected_cells_list.append(selected_cells)
                 
-                display_with_grid = visualize_grid(display, mask_rects, grid_rows, grid_cols, selected_cells_list)
+                # CHANGE: Pass mask_data to visualize_grid
+                display_with_grid = visualize_grid(display, mask_data, selected_cells_list)
                 cv2.imshow(window_name, display_with_grid)
             else:
                 cv2.imshow(window_name, display)
                 
             key = cv2.waitKey(1) & 0xFF
             if key == 13:  # Enter key
-                if mask_rects:
-                    print(f"{len(mask_rects)} mask(s) confirmed for first frame.")
+                if mask_data:  # CHANGE: Use mask_data instead of mask_rects
+                    print(f"{len(mask_data)} mask(s) confirmed for first frame.")
                     break
                 else:
                     print("No rectangles drawn. Please draw at least one rectangle before confirming.")
@@ -414,11 +443,11 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 cv2.destroyAllWindows()
                 continue
             elif key == ord('d') or key == ord('D'):  # Delete key
-                if 0 <= current_mask_idx < len(mask_rects):  # Use a clearer range check
-                    deleted_rect = mask_rects.pop(current_mask_idx)
-                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
-                    if mask_rects:
-                        current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                if 0 <= current_mask_idx < len(mask_data):  # CHANGE: Use mask_data
+                    deleted_mask = mask_data.pop(current_mask_idx)  # CHANGE: Use mask_data
+                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_mask[0]}")  # CHANGE: Access rect from mask item
+                    if mask_data:  # CHANGE: Use mask_data
+                        current_mask_idx = min(current_mask_idx, len(mask_data) - 1)
                     else:
                         current_mask_idx = -1  # No rectangles left
                 else:
@@ -426,24 +455,22 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 
         cv2.destroyAllWindows()
         
-        if not mask_rects:
+        if not mask_data:
             print(f"No masks created for scene {scene_name}, skipping.")
             continue
         
         # Store first frame masks
-        start_masks = mask_rects.copy()
+        start_masks = mask_data.copy()  # CHANGE: Use mask_data
         
-        # Calculate mask sizes
-        mask_sizes = [(rect[2] - rect[0], rect[3] - rect[1]) for rect in start_masks]
-        print(f"Created {len(mask_rects)} mask(s) for scene {scene_name}:")
-        for i, (rect, size) in enumerate(zip(start_masks, mask_sizes)):
-            print(f"  Mask #{i+1}: position={rect}, size={size}")
+        # Display mask information
+        print(f"Created {len(mask_data)} mask(s) for scene {scene_name}:")  # CHANGE: Use mask_data
+        for i, (rect, grid_rows, grid_cols, cells_to_mask) in enumerate(start_masks):  # CHANGE: Unpack mask item
+            print(f"  Mask #{i+1}: position={rect}, size={rect[2]-rect[0]}x{rect[3]-rect[1]}, grid={grid_rows}x{grid_cols}, cells_to_mask={cells_to_mask}")
         
         # Create selected cells lists for all rectangles
         selected_cells_list = []
-        for i in range(len(mask_rects)):
-            total_cells = grid_rows * grid_cols
-            selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
+        for i, mask_item in enumerate(mask_data):  # CHANGE: Iterate over mask_data items
+            selected_cells = select_random_cells(i, global_scene_idx, mask_item, random_state)  # CHANGE: Pass mask_item
             selected_cells_list.append(selected_cells)
 
         # Load last frame
@@ -453,12 +480,12 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
             continue
         
         # Initialize last frame masks with first frame masks
-        mask_rects = start_masks.copy()
+        mask_data = start_masks.copy()
         
         window_name = f"Adjust Masks - Last Frame of Scene {scene_name}"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, min(frame_width, 1200), min(frame_height, 800))
-        cv2.setMouseCallback(window_name, set_mask_position, param=(frame_height, frame_width, mask_sizes))
+        cv2.setMouseCallback(window_name, set_mask_position, param=(frame_height, frame_width))
 
         print("\nAdjust mask positions on the last frame:")
         print("Click and drag on rectangles to move them.")
@@ -469,16 +496,16 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         
         while True:
             display = last_frame.copy()
-            if mask_rects:
-                display_with_grid = visualize_grid(display, mask_rects, grid_rows, grid_cols, selected_cells_list)
+            if mask_data:
+                display_with_grid = visualize_grid(display, mask_data, selected_cells_list)
                 cv2.imshow(window_name, display_with_grid)
             else:
                 cv2.imshow(window_name, display)
                 
             key = cv2.waitKey(1) & 0xFF
             if key == 13:  # Enter key
-                if mask_rects:
-                    print(f"All {len(mask_rects)} mask positions confirmed for last frame.")
+                if mask_data:
+                    print(f"All {len(mask_data)} mask positions confirmed for last frame.")
                     break
                 else:
                     print("No masks available. Please return to first frame and draw masks.")
@@ -486,7 +513,7 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 cv2.destroyAllWindows()
                 
                 # Store current end masks before going back to first frame
-                end_masks = mask_rects.copy()
+                end_masks = mask_data.copy()
                 
                 # Return to first frame to add more masks
                 window_name = f"Add More Masks - First Frame of Scene {scene_name}"
@@ -494,11 +521,11 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 cv2.setMouseCallback(window_name, draw_rectangle, param=(frame_height, frame_width))
                 
                 # Make sure current_mask_idx is properly initialized when returning to add more masks
-                if not mask_rects:
+                if not mask_data:
                     current_mask_idx = -1
                 else:
                     # Keep the last rect selected if there are any
-                    current_mask_idx = len(mask_rects) - 1
+                    current_mask_idx = len(mask_data) - 1
                 
                 print("\nReturned to first frame to add more masks.")
                 print("Draw additional rectangles.")
@@ -507,23 +534,39 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 
                 while True:
                     display = clone.copy()
-                    # [... existing code for displaying rectangles ...]
+                    if temp_rect and drawing:
+                        # Show the rectangle being drawn
+                        x1, y1, x2, y2 = temp_rect
+                        cv2.rectangle(display, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                    
+                    if mask_data:  # CHANGE: Use mask_data
+                        # Update selected cells list
+                        selected_cells_list = []
+                        for i, mask_item in enumerate(mask_data):  # CHANGE: Iterate over mask_data
+                            selected_cells = select_random_cells(i, global_scene_idx, mask_item, random_state)  # CHANGE: Pass mask_item
+                            selected_cells_list.append(selected_cells)
+                        
+                        # CHANGE: Pass mask_data to visualize_grid
+                        display_with_grid = visualize_grid(display, mask_data, selected_cells_list)
+                        cv2.imshow(window_name, display_with_grid)
+                    else:
+                        cv2.imshow(window_name, display)
                     
                     key = cv2.waitKey(1) & 0xFF
                     if key == 13:  # Enter key
-                        print(f"Currently {len(mask_rects)} masks for first frame.")
+                        print(f"Currently {len(mask_data)} masks for first frame.")
                         break
                     elif key == 27:  # Escape key
                         print("Adding more masks cancelled. Returning to last frame.")
                         # Restore previous masks
-                        mask_rects = end_masks.copy()
+                        mask_data = end_masks.copy()
                         break
                     elif key == ord('d') or key == ord('D'):  # Delete key
-                        if 0 <= current_mask_idx < len(mask_rects):
-                            deleted_rect = mask_rects.pop(current_mask_idx)
-                            print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
-                            if mask_rects:
-                                current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                        if 0 <= current_mask_idx < len(mask_data):
+                            deleted_mask = mask_data.pop(current_mask_idx)
+                            print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_mask[0]}")
+                            if mask_data:
+                                current_mask_idx = min(current_mask_idx, len(mask_data) - 1)
                             else:
                                 current_mask_idx = -1  # No rectangles left
                         else:
@@ -535,13 +578,12 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 # Now return to last frame to place new masks
                 window_name = f"Adjust Masks - Last Frame of Scene {scene_name}"
                 cv2.namedWindow(window_name)
-                cv2.setMouseCallback(window_name, set_mask_position, param=(frame_height, frame_width, mask_sizes))
+                cv2.setMouseCallback(window_name, set_mask_position, param=(frame_height, frame_width))
                 
                 # Update selected cells list
                 selected_cells_list = []
-                for i in range(len(mask_rects)):
-                    total_cells = grid_rows * grid_cols
-                    selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
+                for i, mask_item in enumerate(mask_data):  # CHANGE: Iterate over mask_data
+                    selected_cells = select_random_cells(i, global_scene_idx, mask_item, random_state)  # CHANGE: Pass mask_item
                     selected_cells_list.append(selected_cells)
                 
                 print("\nReturned to last frame. Adjust all mask positions.")
@@ -552,16 +594,16 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 cv2.destroyAllWindows()
                 continue
             elif key == ord('d') or key == ord('D'):  # Delete key
-                if 0 <= current_mask_idx < len(mask_rects):  # Use a clearer range check
-                    deleted_rect = mask_rects.pop(current_mask_idx)
+                if 0 <= current_mask_idx < len(mask_data):  # Use a clearer range check
+                    deleted_rect = mask_data.pop(current_mask_idx)
                     
                     # Also update the selected cells list
                     if selected_cells_list and len(selected_cells_list) > current_mask_idx:
                         selected_cells_list.pop(current_mask_idx)
                     
-                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
-                    if mask_rects:
-                        current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_mask[0]}")
+                    if mask_data:
+                        current_mask_idx = min(current_mask_idx, len(mask_data) - 1)
                     else:
                         current_mask_idx = -1  # No rectangles left
                 else:
@@ -570,7 +612,7 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         cv2.destroyAllWindows()
 
         # Store final last frame masks
-        end_masks = mask_rects.copy()
+        end_masks = mask_data.copy()
         
         # Store all information for this scene
         scene_masks[scene_name] = (start_masks, end_masks, frame_height, frame_width, normal_frames, selected_cells_list)
@@ -610,8 +652,6 @@ def generate_scene_masks(scene_masks):
             mask_image = create_binary_grid_mask(
                 current_masks,
                 selected_cells_list, 
-                grid_rows, 
-                grid_cols,
                 frame_height, 
                 frame_width
             )
@@ -637,29 +677,13 @@ def generate_scene_masks(scene_masks):
                     masked_frame = apply_grid_mask(
                         frame, 
                         current_masks, 
-                        selected_cells_list, 
-                        grid_rows, 
-                        grid_cols
+                        selected_cells_list
                     )
                     
                     ll_output_dir = os.path.join(scene_output_dir, ll, "frames")
                     os.makedirs(ll_output_dir, exist_ok=True)
                     output_path = os.path.join(ll_output_dir, os.path.basename(frame_path))
                     cv2.imwrite(output_path, masked_frame)
-
-        # Save mask array and other information
-        np.save(os.path.join(scene_output_dir, "masks.npy"), mask_array)
-        
-        # Save masks information
-        masks_info = {
-            "num_masks": num_masks,
-            "start_masks": start_masks,
-            "end_masks": end_masks
-        }
-        np.save(os.path.join(scene_output_dir, "masks_info.npy"), masks_info)
-        
-        # Save selected cells information
-        np.save(os.path.join(scene_output_dir, "selected_cells.npy"), np.array(selected_cells_list))
         
         print(f"Completed scene {scene_name}. Masks saved to {mask_output_dir}")
 
