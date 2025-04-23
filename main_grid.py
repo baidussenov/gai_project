@@ -17,7 +17,7 @@ dragging = False
 start_point = None
 end_point = None
 mask_rects = []  # List to store multiple masks per scene
-current_mask_idx = 0  # Index of current mask being drawn/modified
+current_mask_idx = -1  # Index of current mask being drawn/modified
 temp_rect = None  # To store rectangle during drawing
 drag_offset = (0, 0)  # Offset for dragging
 grid_rows = None
@@ -76,6 +76,7 @@ def draw_rectangle(event, x, y, flags, param):
                 current_mask_idx = i
                 drag_offset = (x - x1, y - y1)
                 clicked_on_rect = True
+                print(f"Selected rectangle {current_mask_idx + 1} for dragging (press 'd' to delete)")
                 break
         
         # If not clicking on existing rectangle, start drawing a new one
@@ -143,7 +144,7 @@ def set_mask_position(event, x, y, flags, param):
                 current_mask_idx = i
                 drag_offset = (x - x1, y - y1)
                 clicked_on_rect = True
-                print(f"Selected rectangle {current_mask_idx + 1} for dragging")
+                print(f"Selected rectangle {current_mask_idx + 1} for dragging (press 'd' to delete)")
                 break
     
     elif event == cv2.EVENT_MOUSEMOVE and dragging and current_mask_idx < len(mask_rects):
@@ -320,7 +321,7 @@ def select_random_cells(rect_idx, scene_idx, total_cells, cells_to_mask, random_
 
 def collect_scene_masks(scene_dirs, num_scenes, start_scene):
     """Collect first and last frame masks for all specified scenes."""
-    global mask_rects
+    global mask_rects, current_mask_idx, temp_rect
     scene_masks = {}  # {scene_name: (start_masks, end_masks, frame_height, frame_width, normal_frames, selected_cells_list)}
     
     # Calculate the end index for scene selection
@@ -365,7 +366,9 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         
         # Reset masks for this scene
         mask_rects = []
-        
+        current_mask_idx = -1  # Initialize to -1 to indicate no rectangle is selected
+        temp_rect = None
+                
         # Allow drawing rectangles for the first frame
         clone = first_frame.copy()
         window_name = f"Draw Masks - First Frame of Scene {scene_name}"
@@ -377,6 +380,7 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         print("Left-click and drag to create a rectangle. Click on existing rectangles to move them.")
         print("Press Enter to confirm all rectangles and move to last frame.")
         print("Press Esc to cancel and skip this scene.")
+        print("Select a rectangle and press 'd' to delete it.")
         
         while True:
             display = clone.copy()
@@ -409,6 +413,16 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 print(f"Mask selection cancelled for scene {scene_name}, skipping.")
                 cv2.destroyAllWindows()
                 continue
+            elif key == ord('d') or key == ord('D'):  # Delete key
+                if 0 <= current_mask_idx < len(mask_rects):  # Use a clearer range check
+                    deleted_rect = mask_rects.pop(current_mask_idx)
+                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
+                    if mask_rects:
+                        current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                    else:
+                        current_mask_idx = -1  # No rectangles left
+                else:
+                    print("No rectangle selected. Click on a rectangle first before deleting.")
                 
         cv2.destroyAllWindows()
         
@@ -451,6 +465,7 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
         print("Press Enter to confirm all positions.")
         print("Press Space to add another mask (returns to first frame).")
         print("Press Esc to cancel and skip this scene.")
+        print("Select a rectangle and press 'd' to delete it.")
         
         while True:
             display = last_frame.copy()
@@ -475,29 +490,25 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 
                 # Return to first frame to add more masks
                 window_name = f"Add More Masks - First Frame of Scene {scene_name}"
-                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                cv2.resizeWindow(window_name, min(frame_width, 1200), min(frame_height, 800))
+                cv2.namedWindow(window_name)
                 cv2.setMouseCallback(window_name, draw_rectangle, param=(frame_height, frame_width))
+                
+                # Make sure current_mask_idx is properly initialized when returning to add more masks
+                if not mask_rects:
+                    current_mask_idx = -1
+                else:
+                    # Keep the last rect selected if there are any
+                    current_mask_idx = len(mask_rects) - 1
                 
                 print("\nReturned to first frame to add more masks.")
                 print("Draw additional rectangles.")
                 print("Press Enter when done to return to last frame.")
+                print("Select a rectangle by clicking on it, then press 'd' to delete it.")
                 
                 while True:
                     display = clone.copy()
-                    if mask_rects:
-                        # Update selected cells list for visualization
-                        selected_cells_list = []
-                        for i in range(len(mask_rects)):
-                            total_cells = grid_rows * grid_cols
-                            selected_cells = select_random_cells(i, global_scene_idx, total_cells, cells_to_mask, random_state)
-                            selected_cells_list.append(selected_cells)
-                        
-                        display_with_grid = visualize_grid(display, mask_rects, grid_rows, grid_cols, selected_cells_list)
-                        cv2.imshow(window_name, display_with_grid)
-                    else:
-                        cv2.imshow(window_name, display)
-                        
+                    # [... existing code for displaying rectangles ...]
+                    
                     key = cv2.waitKey(1) & 0xFF
                     if key == 13:  # Enter key
                         print(f"Currently {len(mask_rects)} masks for first frame.")
@@ -507,6 +518,17 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                         # Restore previous masks
                         mask_rects = end_masks.copy()
                         break
+                    elif key == ord('d') or key == ord('D'):  # Delete key
+                        if 0 <= current_mask_idx < len(mask_rects):
+                            deleted_rect = mask_rects.pop(current_mask_idx)
+                            print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
+                            if mask_rects:
+                                current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                            else:
+                                current_mask_idx = -1  # No rectangles left
+                        else:
+                            print("No rectangle selected. Click on a rectangle first before deleting.")
+
                 
                 cv2.destroyAllWindows()
                 
@@ -529,6 +551,21 @@ def collect_scene_masks(scene_dirs, num_scenes, start_scene):
                 print(f"Mask adjustment cancelled for scene {scene_name}, skipping.")
                 cv2.destroyAllWindows()
                 continue
+            elif key == ord('d') or key == ord('D'):  # Delete key
+                if 0 <= current_mask_idx < len(mask_rects):  # Use a clearer range check
+                    deleted_rect = mask_rects.pop(current_mask_idx)
+                    
+                    # Also update the selected cells list
+                    if selected_cells_list and len(selected_cells_list) > current_mask_idx:
+                        selected_cells_list.pop(current_mask_idx)
+                    
+                    print(f"Deleted rectangle {current_mask_idx + 1}: {deleted_rect}")
+                    if mask_rects:
+                        current_mask_idx = min(current_mask_idx, len(mask_rects) - 1)
+                    else:
+                        current_mask_idx = -1  # No rectangles left
+                else:
+                    print("No rectangle selected. Click on a rectangle first before deleting.")
 
         cv2.destroyAllWindows()
 
